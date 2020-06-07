@@ -1,0 +1,151 @@
+name: QMake Build Matrix
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    name: "${{ matrix.config.name }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - name: "Windows Latest MSVC"
+            artifact: "Windows-MSVC"
+            os: windows-latest
+            cc: "cl"
+            cxx: "cl"
+            shell: cmd
+            environment_script: call "C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Enterprise\\VC\\Auxiliary\\Build\\vcvars64.bat"
+            configure_script: >-
+              ./configure.bat -opensource -confirm-license -verbose 
+              -prefix %GITHUB_WORKSPACE%\install
+              -debug-and-release -release
+              -nomake tests -nomake examples -no-compile-examples
+              -opengl dynamic 
+              -qt-libjpeg -qt-libpng
+              -qt-zlib
+              -gui
+            build_script: |
+              nmake
+              nmake install
+
+            # -no-sql-mysql -plugin-sql-psql -plugin-sql-sqlite
+          - name: "Ubuntu Latest GCC"
+            artifact: "Linux"
+            os: ubuntu-latest
+            cc: "gcc"
+            cxx: "g++"
+            shell: bash
+            environment_script: ""
+            configure_script: >-
+              ./configure -opensource -confirm-license -verbose 
+              -prefix ${GITHUB_WORKSPACE}/install 
+              -release
+              -nomake tests -nomake examples -no-compile-examples
+              -no-harfbuzz
+              -qt-libpng
+              -gui
+            build_script: |
+              make
+              make install
+            # -qt-pcre -qt-harfbuzz -R .
+            # -no-sql-mysql -plugin-sql-psql -plugin-sql-sqlite
+            # -openssl -I {{.Env.OPENSSL_HOME}}/include -L {{.Env.OPENSSL_HOME}}/lib
+            #  QMAKE_LFLAGS_APP+=-s
+    runs-on: "${{ matrix.config.os }}"
+    defaults:
+      run:
+        shell: ${{ matrix.config.shell }}
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Install system libs
+        if: contains(matrix.config.os, 'ubuntu')
+        run: |
+          sudo apt update
+          sudo apt install libgl1-mesa-dev libclang-dev libxcb1-dev libx11-xcb-dev libxcb-glx0-dev libxkbcommon-x11-dev libegl1-mesa-dev libglu1-mesa-dev libx11-dev libxext-dev libxfixes-dev libxi-dev libxrender-dev
+
+      - name: Init Repository
+        run: perl init-repository --mirror=https://github.com/qt/ --module-subset=qtbase
+
+      - name: Configure
+        run: |
+          ${{ matrix.config.environment_script }}
+          ${{ matrix.config.configure_script }}
+
+      - name: Build
+        run: |
+          ${{ matrix.config.environment_script }}
+          ${{ matrix.config.build_script }}
+
+      - name: Pack
+        working-directory: ${{ github.workspace }}/install
+        run: tar cJfv ../${{ matrix.config.artifact }}.tar.xz .
+
+      - name: Upload
+        uses: actions/upload-artifact@v1
+        with:
+          path: ./${{ matrix.config.artifact }}.tar.xz
+          name: ${{ matrix.config.artifact }}.tar.xz
+  # release:
+  #   needs: build
+  #   if: contains(github.ref, 'tags/v')
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Create Release
+  #       id: create_release
+  #       uses: actions/create-release@v1.0.0
+  #       env:
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #       with:
+  #         tag_name: ${{ github.ref }}
+  #         release_name: Release ${{ github.ref }}
+  #         draft: false
+  #         prerelease: false
+  #     - name: Store Release url
+  #       run: |
+  #         echo "${{ steps.create_release.outputs.upload_url }}" > ./upload_url
+  #     - uses: actions/upload-artifact@v1
+  #       with:
+  #         path: ./upload_url
+  #         name: upload_url
+  # publish:
+  #   needs: release
+  #   if: contains(github.ref, 'tags/v')
+  #   name: ${{ matrix.config.name }}
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       config:
+  #         - name: "Windows Latest MSVC"
+  #           artifact: "Windows-MSVC"
+  #           os: ubuntu-latest
+  #         - name: "Ubuntu Latest GCC"
+  #           artifact: "Linux"
+  #           os: ubuntu-latest
+  #   runs-on: ${{ matrix.config.os }}
+  #   steps:
+  #     - name: Download artifact
+  #       uses: actions/download-artifact@v1
+  #       with:
+  #         name: ${{ matrix.config.artifact }}.tar.xz
+  #         path: ./
+  #     - name: Download URL
+  #       uses: actions/download-artifact@v1
+  #       with:
+  #         name: upload_url
+  #         path: ./
+  #     - id: set_upload_url
+  #       run: |
+  #         upload_url=`cat ./upload_url`
+  #         echo ::set-output name=upload_url::$upload_url
+  #     - name: Upload to Release
+  #       uses: actions/upload-release-asset@v1.0.1
+  #       env:
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #       with:
+  #         upload_url: ${{ steps.set_upload_url.outputs.upload_url }}
+  #         asset_path: ./${{ matrix.config.artifact }}.tar.xz
+  #         asset_name: ${{ matrix.config.artifact }}.tar.xz
+  #         asset_content_type: application/x-gtar
